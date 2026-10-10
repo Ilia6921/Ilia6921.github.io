@@ -23,10 +23,15 @@ function fail(msg){ s.textContent = msg; const last = localStorage.getItem('lado
 async function go(){
   try {
     const key = await crypto.subtle.importKey('jwk', PUB, {name:'ECDSA', namedCurve:'P-256'}, false, ['verify']);
-    const r = await fetch('https://ntfy.sh/' + TOPIC + '/json?poll=1&since=24h', {cache:'no-store'});
-    const lines = (await r.text()).trim().split('\n'); let best = null;
-    for (const l of lines) { try {
-      const m = JSON.parse(JSON.parse(l).message);
+    // two sources: ntfy (fresh, hourly) and hub.json in this repo (fallback, updated on address change)
+    const cands = [];
+    const t = (p, ms) => Promise.race([p, new Promise((_, j) => setTimeout(() => j(0), ms))]);
+    await Promise.allSettled([
+      t(fetch('https://ntfy.sh/' + TOPIC + '/json?poll=1&since=24h', {cache:'no-store'}).then(r => r.text()).then(x => x.trim().split('\n').forEach(l => { try { cands.push(JSON.parse(JSON.parse(l).message)); } catch(e){} })), 8000),
+      t(fetch('hub.json?t=' + Date.now(), {cache:'no-store'}).then(r => r.json()).then(m => cands.push(m)), 8000)
+    ]);
+    let best = null;
+    for (const m of cands) { try {
       if (!RX.test(m.url) || !m.ts || !m.sig) continue;
       const ok = await crypto.subtle.verify({name:'ECDSA', hash:'SHA-256'}, key, b64(m.sig), new TextEncoder().encode(m.url + '|' + m.ts));
       if (ok && (!best || m.ts > best.ts)) best = m;
